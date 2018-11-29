@@ -908,94 +908,91 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         // TODO: this resolves an odd unsized issue with the loop_fn future
         use std::mem;
-        let future;
 
-        match *self {
-            TrySend::Lock {
-                ref opts,
-                ref conns,
-                ref mut request,
-            } => {
-                // pull a lock on the shared connections, lock releases at the end of the method
-                let conns = conns.try_lock();
-                match conns {
-                    Err(TryLockError::Poisoned(_)) => {
-                        // TODO: what to do on poisoned errors? this is non-recoverable, right?
-                        return Err(ProtoError::from("Lock Poisoned"));
-                    }
-                    Err(TryLockError::WouldBlock) => {
-                        // since there is nothing registered with Tokio, we need to yield...
-                        task::current().notify();
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(mut conns) => {
-                        let opts = *opts;
+        loop {
+            trace!("try_send poll");
+            *self = match *self {
+                TrySend::Lock {
+                    ref opts,
+                    ref conns,
+                    ref mut request,
+                } => {
+                    // pull a lock on the shared connections, lock releases at the end of the method
+                    let conns = conns.try_lock();
+                    match conns {
+                        Err(TryLockError::Poisoned(_)) => {
+                            // TODO: what to do on poisoned errors? this is non-recoverable, right?
+                            return Err(ProtoError::from("Lock Poisoned"));
+                        }
+                        Err(TryLockError::WouldBlock) => {
+                            // since there is nothing registered with Tokio, we need to yield...
+                            trace!("yielding due to lock");
+                            task::current().notify();
+                            return Ok(Async::NotReady);
+                        }
+                        Ok(mut conns) => {
+                            let opts = *opts;
 
-                        // select the highest priority connection
-                        //   reorder the connections based on current view...
-                        //   this reorders the inner set
-                        conns.sort_unstable();
+                            // select the highest priority connection
+                            //   reorder the connections based on current view...
+                            //   this reorders the inner set
+                            conns.sort_unstable();
 
-                        // TODO: restrict this size to a maximum # of NameServers to try
-                        // get a stable view for trying all connections
-                        //   we split into chunks of the numeber of parallel requests to issue
-                        let mut conns: Vec<NameServer<C, P>> = conns.clone();
-                        let request = mem::replace(request, None);
-                        let request = request.expect("bad state, mesage should never be None");
-                        let request_loop = request.clone();
+                            // TODO: restrict this size to a maximum # of NameServers to try
+                            // get a stable view for trying all connections
+                            //   we split into chunks of the numeber of parallel requests to issue
+                            let mut conns: Vec<NameServer<C, P>> = conns.clone();
+                            let request = mem::replace(request, None);
+                            let request = request.expect("bad state, mesage should never be None");
+                            let request_loop = request.clone();
 
-                        let loop_future = future::loop_fn(
-                            (
-                                conns,
-                                request_loop,
-                                ProtoError::from("No connections available"),
-                            ),
-                            move |(mut conns, request, err)| {
-                                let request_cont = request.clone();
+                            let loop_future = future::loop_fn(
+                                (
+                                    conns,
+                                    request_loop,
+                                    ProtoError::from("No connections available"),
+                                ),
+                                move |(mut conns, request, err)| {
+                                    let request_cont = request.clone();
 
-                                // construct the parallel requests, 2 is the default
-                                let mut par_conns = SmallVec::<[NameServer<C, P>; 2]>::new();
-                                let count = conns.len().min(opts.num_concurrent_reqs.max(1));
-                                for conn in conns.drain(..count) {
-                                    par_conns.push(conn);
-                                }
+                                    // construct the parallel requests, 2 is the default
+                                    let mut par_conns = SmallVec::<[NameServer<C, P>; 2]>::new();
+                                    let count = conns.len().min(opts.num_concurrent_reqs.max(1));
+                                    for conn in conns.drain(..count) {
+                                        par_conns.push(conn);
+                                    }
 
-                                // construct the requests to send
-                                let requests = if par_conns.is_empty() {
-                                    None
-                                } else {
-                                    Some(
-                                        par_conns
-                                            .into_iter()
-                                            .map(move |mut conn| conn.send(request.clone())),
+                                    // construct the requests to send
+                                    let requests = if par_conns.is_empty() {
+                                        None
+                                    } else {
+                                        Some(
+                                            par_conns
+                                                .into_iter()
+                                                .map(move |mut conn| conn.send(request.clone())),
+                                        )
+                                    };
+
+                                    // execute all the requests
+                                    requests.ok_or_else(move || err).into_future().and_then(
+                                        |requests| {
+                                            futures::select_ok(requests)
+                                                .and_then(|(sent, _)| Ok(Loop::Break(sent)))
+                                                .or_else(move |err| {
+                                                    Ok(Loop::Continue((conns, request_cont, err)))
+                                                })
+                                        },
                                     )
-                                };
+                                },
+                            );
 
-                                // execute all the requests
-                                requests.ok_or_else(move || err).into_future().and_then(
-                                    |requests| {
-                                        futures::select_ok(requests)
-                                            .and_then(|(sent, _)| Ok(Loop::Break(sent)))
-                                            .or_else(move |err| {
-                                                Ok(Loop::Continue((conns, request_cont, err)))
-                                            })
-                                    },
-                                )
-                            },
-                        );
-
-                        future = Box::new(loop_future);
+                            TrySend::DoSend(Box::new(loop_future))
+                        }
                     }
                 }
-            }
-            TrySend::DoSend(ref mut future) => return future.poll(),
+                TrySend::DoSend(ref mut future) => return future.poll(),
+            };
         }
-
-        // can only get here if we were in the TrySend::Lock state
-        *self = TrySend::DoSend(future);
-
-        task::current().notify();
-        Ok(Async::NotReady)
     }
 }
 

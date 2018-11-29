@@ -73,12 +73,14 @@ impl<H: DnsHandle> Future for RetrySendFuture<H> {
         // loop over the future, on errors, spawn a new future
         //  on ready and not ready return.
         loop {
+            trace!("poll response");
             match self.future.poll() {
                 r @ Ok(_) => return r,
                 Err(e) => {
                     if self.remaining_attempts == 0 {
                         return Err(e);
                     }
+                    trace!("retrying {}", e);
 
                     self.remaining_attempts -= 1;
                     // FIXME: if the "sent" Message is part of the error result,

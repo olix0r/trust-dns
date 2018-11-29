@@ -87,6 +87,7 @@ where
         //  makes this self throttling.
         loop {
             // poll the underlying stream, to drive it...
+            trace!("polling i/o");
             match self.io_stream.poll() {
                 // The stream is ready
                 Ok(Async::Ready(Some(()))) => (),
@@ -109,6 +110,7 @@ where
             }
 
             // then see if there is more to send
+            trace!("polling messages");
             match self
                 .outbound_messages
                 .poll()

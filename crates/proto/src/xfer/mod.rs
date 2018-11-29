@@ -305,24 +305,26 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let future;
-            match self {
+            *self = match self {
                 OneshotDnsResponseReceiver::Receiver(ref mut receiver) => {
-                    future = try_ready!(
+                    trace!("polling response receiver");
+                    let fut = try_ready!(
                         receiver
                             .poll()
                             .map_err(|_| ProtoError::from("receiver was canceled"))
                     );
+                    OneshotDnsResponseReceiver::Received(fut)
                 }
-                OneshotDnsResponseReceiver::Received(ref mut future) => return future.poll(),
+                OneshotDnsResponseReceiver::Received(ref mut future) => {
+                    trace!("polling response");
+                    return future.poll()
+                }
                 OneshotDnsResponseReceiver::Err(err) => {
                     return Err(err
                         .take()
                         .expect("futures should not be polled after complete"))
                 }
-            }
-
-            *self = OneshotDnsResponseReceiver::Received(future);
+            };
         }
     }
 }
