@@ -113,7 +113,7 @@ impl<C: DnsHandle + 'static> Future for LookupIpFuture<C> {
 
             if should_retry {
                 if let Some(name) = self.names.pop() {
-                    trace!("retry: {}", name);
+                    trace!("query: {}", name);
                     // If there's another name left to try, build a new query
                     // for that next name and continue looping.
                     self.query = strategic_lookup(

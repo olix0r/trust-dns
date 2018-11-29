@@ -342,6 +342,7 @@ where
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        trace!("poll bg");
         self.inner.poll()
     }
 }
