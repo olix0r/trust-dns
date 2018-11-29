@@ -564,85 +564,82 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
     type Error = ResolveError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        // first transition any polling that is needed (mutable refs...)
-        let records: Option<Records>;
-        trace!("poll query state");
-        match *self {
-            QueryState::FromCache(ref mut from_cache, ..) => {
-                trace!("poll from cache");
-                match from_cache.poll() {
-                    // need to query since it wasn't in the cache
-                    Ok(Async::Ready(None)) => (), // handled below
-                    Ok(Async::Ready(Some(ips))) => return Ok(Async::Ready(ips)),
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(error) => return Err(error),
-                };
+        loop {
+            // first transition any polling that is needed (mutable refs...)
+            trace!("poll query state");
+            let records = match *self {
+                QueryState::FromCache(ref mut from_cache, ..) => {
+                    trace!("poll from cache");
+                    match from_cache.poll() {
+                        // need to query since it wasn't in the cache
+                        Ok(Async::Ready(None)) => (), // handled below
+                        Ok(Async::Ready(Some(ips))) => return Ok(Async::Ready(ips)),
+                        Ok(Async::NotReady) => return Ok(Async::NotReady),
+                        Err(error) => return Err(error),
+                    };
 
-                records = None;
-            }
-            QueryState::Query(ref mut query, ..) => {
-                trace!("poll query");
-                let poll = query.poll();
-                match poll {
-                    Ok(Async::NotReady) => {
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(Async::Ready(rdatas)) => records = Some(rdatas), // handled in next match
-                    Err(e) => {
-                        return Err(e);
+                    None
+                }
+                QueryState::Query(ref mut query, ..) => {
+                    trace!("poll query");
+                    let poll = query.poll();
+                    match poll {
+                        Ok(Async::NotReady) => {
+                            return Ok(Async::NotReady);
+                        }
+                        Ok(Async::Ready(rdatas)) => Some(rdatas), // handled in next match
+                        Err(e) => {
+                            return Err(e);
+                        }
                     }
                 }
-            }
-            QueryState::CnameChain(ref mut future, _, ttl, _) => {
-                trace!("poll cname chain");
-                let poll = future.poll();
-                match poll {
-                    Ok(Async::NotReady) => {
-                        return Ok(Async::NotReady);
-                    }
-                    Ok(Async::Ready(lookup)) => {
-                        records = Some(Records::Chained {
-                            cached: lookup,
-                            min_ttl: ttl,
-                        });
-                    }
-                    Err(e) => {
-                        return Err(e);
+                QueryState::CnameChain(ref mut future, _, ttl, _) => {
+                    trace!("poll cname chain");
+                    let poll = future.poll();
+                    match poll {
+                        Ok(Async::NotReady) => {
+                            return Ok(Async::NotReady);
+                        }
+                        Ok(Async::Ready(lookup)) => {
+                            Some(Records::Chained {
+                                cached: lookup,
+                                min_ttl: ttl,
+                            })
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
                     }
                 }
+                QueryState::InsertCache(ref mut insert_cache) => {
+                    trace!("poll cache insert");
+                    return insert_cache.poll();
+                }
+                QueryState::Error => panic!("invalid error state"),
+            };
+
+            // getting here means there are Aync::Ready available.
+            match *self {
+                QueryState::FromCache(..) => self.query_after_cache(),
+                QueryState::Query(..) => match records {
+                    Some(Records::CnameChain {
+                        next: future,
+                        min_ttl: ttl,
+                    }) => self.cname(future, ttl),
+                    Some(records) => {
+                        self.cache(records);
+                    }
+                    None => panic!("should have returned earlier"),
+                },
+                QueryState::CnameChain(..) => match records {
+                    Some(records) => self.cache(records),
+                    None => panic!("should have returned earlier"),
+                },
+                QueryState::InsertCache(..) | QueryState::Error => {
+                    panic!("should have returned earlier")
+                }
             }
-            QueryState::InsertCache(ref mut insert_cache) => {
-                trace!("poll cache insert");
-                return insert_cache.poll();
-            }
-            QueryState::Error => panic!("invalid error state"),
         }
-
-        // getting here means there are Aync::Ready available.
-        match *self {
-            QueryState::FromCache(..) => self.query_after_cache(),
-            QueryState::Query(..) => match records {
-                Some(Records::CnameChain {
-                    next: future,
-                    min_ttl: ttl,
-                }) => self.cname(future, ttl),
-                Some(records) => {
-                    self.cache(records);
-                }
-                None => panic!("should have returned earlier"),
-            },
-            QueryState::CnameChain(..) => match records {
-                Some(records) => self.cache(records),
-                None => panic!("should have returned earlier"),
-            },
-            QueryState::InsertCache(..) | QueryState::Error => {
-                panic!("should have returned earlier")
-            }
-        }
-
-        trace!("yield");
-        task::current().notify(); // yield
-        Ok(Async::NotReady)
     }
 }
 
