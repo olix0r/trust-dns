@@ -190,6 +190,7 @@ impl Future for Task {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
+            trace!("poll rx");
             let poll = self.request_rx.poll().map_err(|e| {
                 error!("AsyncResolver poisoned: {:?}", e);
             });
@@ -208,6 +209,7 @@ impl Future for Task {
                     options,
                     tx,
                 }) => {
+                    trace!("received lookup request: name={:?}; type={:?}", name, record_type);
                     let future = self.lookup(name, record_type, options);
                     // tx.send() will return an error if the oneshot was canceled, but
                     // we don't actually care, so just drop the future.
@@ -218,6 +220,7 @@ impl Future for Task {
                     maybe_ip,
                     tx,
                 }) => {
+                    trace!("received IP lookup request: name={:?}; ip={:?}", maybe_name, maybe_ip);
                     let future = self.lookup_ip(maybe_name, maybe_ip);
                     // tx.send() will return an error if the oneshot was canceled, but
                     // we don't actually care, so just drop the future.
