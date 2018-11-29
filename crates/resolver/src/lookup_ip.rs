@@ -95,6 +95,7 @@ impl<C: DnsHandle + 'static> Future for LookupIpFuture<C> {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
+            trace!("poll query");
             // Try polling the underlying DNS query.
             let query = self.query.poll();
 
@@ -112,6 +113,7 @@ impl<C: DnsHandle + 'static> Future for LookupIpFuture<C> {
 
             if should_retry {
                 if let Some(name) = self.names.pop() {
+                    trace!("retry: {}", name);
                     // If there's another name left to try, build a new query
                     // for that next name and continue looping.
                     self.query = strategic_lookup(
