@@ -566,8 +566,10 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         // first transition any polling that is needed (mutable refs...)
         let records: Option<Records>;
+        trace!("poll query state");
         match *self {
             QueryState::FromCache(ref mut from_cache, ..) => {
+                trace!("poll from cache");
                 match from_cache.poll() {
                     // need to query since it wasn't in the cache
                     Ok(Async::Ready(None)) => (), // handled below
@@ -579,6 +581,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
                 records = None;
             }
             QueryState::Query(ref mut query, ..) => {
+                trace!("poll query");
                 let poll = query.poll();
                 match poll {
                     Ok(Async::NotReady) => {
@@ -591,6 +594,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
                 }
             }
             QueryState::CnameChain(ref mut future, _, ttl, _) => {
+                trace!("poll cname chain");
                 let poll = future.poll();
                 match poll {
                     Ok(Async::NotReady) => {
@@ -608,6 +612,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
                 }
             }
             QueryState::InsertCache(ref mut insert_cache) => {
+                trace!("poll cache insert");
                 return insert_cache.poll();
             }
             QueryState::Error => panic!("invalid error state"),
@@ -635,6 +640,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
             }
         }
 
+        trace!("yield");
         task::current().notify(); // yield
         Ok(Async::NotReady)
     }
