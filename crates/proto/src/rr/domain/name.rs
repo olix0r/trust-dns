@@ -1891,4 +1891,11 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn test_append_domain_exceeds_max_length() {
+        let n = Name::from_ascii("Llocainvannnnnnaxgtezqzqznnnnnn1na.nnntnninvannnnnnaxgtezqzqznnnnnn1na.nnntnnnnnnnaxgtezqzqznnnnnn1na.nnntnaaaaaaaaaaaaaaaaaaaaaaaaiK.iaaaaaaaaaaaaaaaaaaaaaaaaiKa.innnnnaxgtezqzqznnnnnn1na.nnntnaaaaaaaaaaaaaaaaaaaaaaaaiK.iaaaaaaaaaaaaaaaaaaaaaaaaiKa.in").unwrap();
+        let sfx = Name::from_ascii("xxxxxxx.yyyyy.zzz").unwrap();
+        format!("{}", n.append_domain(&sfx));
+    }
 }
